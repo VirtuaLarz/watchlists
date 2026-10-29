@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Lars's Watch Lists</title>
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#10131b">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Figtree:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="bar">
+      <h1>Watch Lists<small id="sub">Loading…</small></h1>
+      <button class="btn ghost" id="manageBtn" type="button" hidden>Lists</button>
+      <button class="btn ghost" id="settingsBtn" type="button" hidden aria-label="Settings">⚙︎</button>
+      <button class="btn primary" id="addBtn" type="button" hidden>+ Add</button>
+    </div>
+    <nav class="tabs" id="tabs" role="tablist" aria-label="Your lists"></nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <section id="signin" class="signin" hidden>
+    <h2>Your movie and show lists, on every device.</h2>
+    <p>Sign in with your Google account to see and edit your lists. Everything syncs between your phone and computer.</p>
+    <button class="btn primary big" id="googleBtn" type="button">Sign in with Google</button>
+    <p class="status" id="signinMsg"></p>
+  </section>
+
+  <section id="appView" hidden>
+    <div class="tools">
+      <input class="search" id="q" type="search" placeholder="Search all lists" aria-label="Search titles" autocomplete="off">
+      <div class="seg" role="group" aria-label="Show">
+        <button type="button" id="fAll" aria-pressed="true">All</button>
+        <button type="button" id="fMovie" aria-pressed="false">Movies</button>
+        <button type="button" id="fTv" aria-pressed="false">Shows</button>
+      </div>
+      <div class="seg" role="group" aria-label="Search scope" id="scopeSeg">
+        <button type="button" id="sList" aria-pressed="true">This list</button>
+        <button type="button" id="sEvery" aria-pressed="false">Every list</button>
+      </div>
+    </div>
+    <div id="firstRun" hidden></div>
+    <div class="meta" id="meta"></div>
+    <div id="home" class="lgrid" hidden></div>
+    <div id="grid" class="grid" aria-live="polite"></div>
+    <div class="more" id="moreWrap" hidden><button class="btn" id="moreBtn" type="button">Show more</button></div>
+  </section>
+  <p class="credit">Titles, dates and posters from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
+</main>
+<div id="sheetHost"></div>
+<input type="file" id="importFile" accept="application/json,.json" hidden>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
