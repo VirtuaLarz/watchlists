@@ -5,5 +5,10 @@ service cloud.firestore {
     match /users/{uid}/{document=**} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }
+    // TMDB keys people choose to share: any signed-in person can use them; only the owner can add, change or remove theirs.
+    match /sharedKeys/{uid} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == uid;
+    }
   }
 }

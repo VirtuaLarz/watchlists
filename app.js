@@ -6,7 +6,7 @@ import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager
 
 const $ = s => document.querySelector(s);
 const CHUNK = 700, PAGE = 150, IMG = "https://image.tmdb.org/t/p/";
-const S = { uid: null, lists: {}, chunks: {}, cur: null, q: "", kind: "all", scope: "list", shown: PAGE, tmdbKey: "", loaded: { lists: false, chunks: false }, unsub: [] };
+const S = { uid: null, lists: {}, chunks: {}, cur: null, q: "", kind: "all", scope: "list", shown: PAGE, tmdbKey: "", shared: [], loaded: { lists: false, chunks: false }, unsub: [] };
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const todayISO = new Date().toISOString().slice(0, 10);
@@ -59,6 +59,7 @@ onAuthStateChanged(auth, user => {
   S.unsub.push(onSnapshot(userCol("lists"), s => { S.lists = {}; s.forEach(d => S.lists[d.id] = d.data()); S.loaded.lists = true; later(); }, fail));
   S.unsub.push(onSnapshot(userCol("chunks"), s => { S.chunks = {}; s.forEach(d => S.chunks[d.id] = d.data()); S.loaded.chunks = true; later(); }, fail));
   S.unsub.push(onSnapshot(userDoc("settings", "main"), d => { S.tmdbKey = d.exists() ? (d.data().tmdbKey || "") : ""; }, () => {}));
+  S.unsub.push(onSnapshot(collection(db, "sharedKeys"), s => { S.shared = []; s.forEach(d => { const v = d.data(); if (v.key) S.shared.push({ uid: d.id, key: v.key, name: v.name || "someone", at: v.at || "" }); }); S.shared.sort((a, b) => a.at.localeCompare(b.at)); }, () => {}));
   render();
 });
 
@@ -221,8 +222,11 @@ function openDetail(it, lid) {
 }
 
 /* ---------- TMDB search ---------- */
-async function tmdb(path, params = {}) {
-  const k = S.tmdbKey.trim(); const bearer = k.length > 60;
+// Your own key wins; otherwise use a key someone has shared with everyone on this app.
+function activeKey() { return (S.tmdbKey || "").trim() || (S.shared.find(x => x.uid !== S.uid) || S.shared[0] || {}).key || ""; }
+function keySource() { if ((S.tmdbKey || "").trim()) return "your own key"; const s = S.shared.find(x => x.uid !== S.uid); return s ? `a key shared by ${s.name}` : ""; }
+async function tmdb(path, params = {}, keyOverride) {
+  const k = (keyOverride ?? activeKey()).trim(); const bearer = k.length > 60;
   const u = new URL("https://api.themoviedb.org/3" + path);
   for (const [a, b] of Object.entries(params)) u.searchParams.set(a, b);
   if (!bearer) u.searchParams.set("api_key", k);
@@ -232,7 +236,7 @@ async function tmdb(path, params = {}) {
   return r.json();
 }
 function openAdd() {
-  if (!S.tmdbKey) { openSettings("Add your TMDB key first, then you can search and add titles."); return; }
+  if (!activeKey()) { openSettings("To search TMDB, add a TMDB key here, or ask someone who uses this app to share theirs."); return; }
   openSheet((el, close) => {
     el.innerHTML = `<h2>Add a title</h2>
       <div class="row"><input class="search" id="aQ" type="search" placeholder="Search TMDB, e.g. Ultraman Leo" autocomplete="off" aria-label="Search TMDB"><button class="btn primary" id="aGo" type="button">Search</button></div>
@@ -277,19 +281,32 @@ function openAdd() {
 /* ---------- settings, import, export ---------- */
 function openSettings(msg) {
   openSheet((el, close) => {
+    const mine = S.shared.find(x => x.uid === S.uid);
+    const src = keySource();
     el.innerHTML = `<h2>Settings</h2>
       ${msg ? `<p class="hint">${esc(msg)}</p>` : ""}
-      <label class="f" for="tk">TMDB API key (or read access token)<input id="tk" type="text" autocomplete="off" spellcheck="false" value="${esc(S.tmdbKey)}" placeholder="Paste from themoviedb.org → Settings → API"></label>
-      <div class="row"><button class="btn primary" id="tkSave" type="button">Save key</button><span class="status" id="tkS"></span></div>
+      <p class="status">${src ? `TMDB search is using ${esc(src)}.` : "TMDB search is off until a key is added or shared."}</p>
+      <label class="f" for="tk">Your TMDB API key (optional if someone shares theirs)<input id="tk" type="text" autocomplete="off" spellcheck="false" value="${esc(S.tmdbKey)}" placeholder="Paste from themoviedb.org → Settings → API"></label>
+      <label class="row" for="shareKey" style="font-size:14px;gap:10px"><input id="shareKey" type="checkbox"${mine ? " checked" : ""}> Share my key with everyone who signs in to this app</label>
+      <p class="hint">Shared keys let other people search TMDB without getting their own key. People can't see your lists, only use the key for searches.</p>
+      <div class="row"><button class="btn primary" id="tkSave" type="button">Save</button><span class="status" id="tkS"></span></div>
       <hr style="border:0;border-top:1px solid var(--line);width:100%">
       <div class="row"><button class="btn" id="exp" type="button">Download a backup</button><button class="btn" id="imp" type="button">Load lists from a file</button></div>
       <p class="hint">Loading a file replaces lists with the same name and adds the rest. Signed in as ${esc(auth.currentUser?.email || "")}.</p>
       <div class="row"><button class="btn danger" id="out" type="button">Sign out</button><button class="btn ghost" id="sX" type="button">Close</button></div>`;
     el.querySelector("#sX").onclick = close;
     el.querySelector("#tkSave").onclick = async () => {
-      const v = el.querySelector("#tk").value.trim(), st = el.querySelector("#tkS");
-      try { await setDoc(userDoc("settings", "main"), { tmdbKey: v }, { merge: true }); S.tmdbKey = v; st.textContent = "Checking…";
-        await tmdb("/configuration"); st.textContent = "Saved. TMDB accepted the key."; }
+      const v = el.querySelector("#tk").value.trim(), share = el.querySelector("#shareKey").checked, st = el.querySelector("#tkS");
+      if (share && !v) { st.textContent = "Add your key above to share it."; return; }
+      st.textContent = "Saving…";
+      try {
+        await setDoc(userDoc("settings", "main"), { tmdbKey: v }, { merge: true }); S.tmdbKey = v;
+        const ref = doc(db, "sharedKeys", S.uid);
+        if (share) await setDoc(ref, { key: v, name: (auth.currentUser?.displayName || "").split(" ")[0] || "a friend", at: mine?.at || new Date().toISOString() });
+        else if (mine) await deleteDoc(ref);
+      } catch (e) { st.textContent = "Couldn’t save. Check your connection and try again."; return; }
+      if (!v) { st.textContent = keySource() ? `Saved. Searching with ${keySource()}.` : "Saved."; return; }
+      try { await tmdb("/configuration", {}, v); st.textContent = share ? "Saved and shared. TMDB accepted the key." : "Saved. TMDB accepted the key."; }
       catch (e) { st.textContent = e.message === "badkey" ? "Saved, but TMDB rejected this key. Double-check it." : "Saved. Couldn’t test it right now."; }
     };
     el.querySelector("#exp").onclick = exportBackup;
@@ -362,6 +379,14 @@ function openManage() {
     draw();
   });
 }
+
+/* ---------- keyboard-aware sheets (iPhone) ---------- */
+if (window.visualViewport) {
+  const vv = window.visualViewport;
+  const sync = () => { document.documentElement.style.setProperty("--vvh", `${vv.height}px`); document.documentElement.style.setProperty("--vvtop", `${vv.offsetTop}px`); };
+  vv.addEventListener("resize", sync); vv.addEventListener("scroll", sync); sync();
+}
+document.addEventListener("focusin", e => { if (e.target.matches("input[type=search], input[type=text]")) setTimeout(() => e.target.scrollIntoView({ block: "nearest" }), 250); });
 
 /* ---------- controls ---------- */
 let qT; $("#q").addEventListener("input", e => { clearTimeout(qT); qT = setTimeout(() => { S.q = e.target.value; S.shown = PAGE; render(); }, 150); });
