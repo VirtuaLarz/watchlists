@@ -4,5 +4,6 @@ set -e
 cd ~/wl && git pull -q
 mkdir -p public && cp index.html app.js styles.css config.js *.png public/
 sed -i 's/all-content-watchlists.firebaseapp.com/all-content-watchlists.web.app/' public/config.js
-echo '{"hosting":{"public":"public"},"firestore":{"rules":"firestore.rules"}}' > firebase.json
+# no-cache: browsers always check for the newest version of the app
+echo '{"hosting":{"public":"public","headers":[{"source":"**/*.@(html|js|css)","headers":[{"key":"Cache-Control","value":"no-cache"}]},{"source":"/","headers":[{"key":"Cache-Control","value":"no-cache"}]}]},"firestore":{"rules":"firestore.rules"}}' > firebase.json
 firebase deploy --only hosting,firestore:rules --project all-content-watchlists --non-interactive
