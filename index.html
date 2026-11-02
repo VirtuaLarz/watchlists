@@ -40,6 +40,13 @@
         <button type="button" id="fMovie" aria-pressed="false">Movies</button>
         <button type="button" id="fTv" aria-pressed="false">Shows</button>
       </div>
+      <select class="pick" id="genre" aria-label="Genre"><option value="">All genres</option></select>
+      <select class="pick" id="sort" aria-label="Sort">
+        <option value="list">List order</option>
+        <option value="old">Oldest first</option>
+        <option value="new">Newest first</option>
+        <option value="az">Title A–Z</option>
+      </select>
       <div class="seg" role="group" aria-label="Search scope" id="scopeSeg">
         <button type="button" id="sList" aria-pressed="true">This list</button>
         <button type="button" id="sEvery" aria-pressed="false">Every list</button>

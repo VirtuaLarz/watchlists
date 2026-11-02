@@ -6,13 +6,38 @@ import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager
 
 const $ = s => document.querySelector(s);
 const CHUNK = 700, PAGE = 150, IMG = "https://image.tmdb.org/t/p/";
-const S = { uid: null, lists: {}, chunks: {}, cur: null, q: "", kind: "all", scope: "list", shown: PAGE, tmdbKey: "", shared: [], loaded: { lists: false, chunks: false }, unsub: [] };
+const S = { uid: null, lists: {}, chunks: {}, cur: null, q: "", kind: "all", scope: "list", shown: PAGE, tmdbKey: "", shared: [], genre: "", sort: "list", gmap: {}, loaded: { lists: false, chunks: false }, unsub: [] };
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const todayISO = new Date().toISOString().slice(0, 10);
 function fmtDate(d) { if (!d || d.length < 10) return d ? d.slice(0, 4) : "—"; return `${+d.slice(8, 10)} ${MONTHS[+d.slice(5, 7) - 1]} ${d.slice(0, 4)}`; }
 function toast(msg) { const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 2800); }
 const keyOf = it => `${it.t}:${it.i}`;
+function pref(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
+
+/* ---------- genres ---------- */
+// Existing titles: looked up in genres.json (built from TMDB). New titles keep their own genres in "g".
+const TMDB_GENRES = { 28: ["Action"], 12: ["Adventure"], 16: ["Animation"], 35: ["Comedy"], 80: ["Crime"], 99: ["Documentary"], 18: ["Drama"], 10751: ["Family"], 14: ["Fantasy"], 36: ["History"], 27: ["Horror"], 10402: ["Music"], 9648: ["Mystery"], 10749: ["Romance"], 878: ["Sci-Fi"], 53: ["Thriller"], 10752: ["War"], 37: ["Western"], 10759: ["Action", "Adventure"], 10762: ["Kids"], 10764: ["Reality"], 10765: ["Sci-Fi", "Fantasy"], 10767: ["Talk"], 10768: ["War"], 10763: ["News"], 10766: ["Soap"] };
+const genresFromIds = ids => [...new Set((ids || []).flatMap(id => TMDB_GENRES[id] || []))];
+function genreOf(it) { return it.g || S.gmap[keyOf(it)] || []; }
+// genres.txt: line 1 = genre names joined by "|"; then one line per type ("m" movies, "t" shows) of
+// space-separated "<id delta>.<genre bitmask>" pairs in base 36, ids ascending.
+fetch("genres.txt").then(r => r.text()).then(txt => {
+  const [head, ...rows] = txt.trim().split("\n"), labels = head.split("|"), map = {};
+  for (const row of rows) {
+    const t = row[0]; let id = 0;
+    for (const pair of row.slice(1).split(" ")) {
+      const [dl, m] = pair.split("."); id += parseInt(dl, 36); const mask = parseInt(m, 36);
+      map[`${t}:${id}`] = labels.filter((_, i) => mask & (1 << i));
+    }
+  }
+  S.gmap = map; fillGenres(labels); render();
+}).catch(() => fillGenres([]));
+function fillGenres(labels) {
+  const all = new Set(labels); for (const [it] of allItems()) (it.g || []).forEach(g => all.add(g));
+  const sel = $("#genre"), cur = S.genre;
+  sel.innerHTML = `<option value="">All genres</option>` + [...all].sort().map(g => `<option${g === cur ? " selected" : ""}>${esc(g)}</option>`).join("");
+}
 
 /* ---------- Firebase ---------- */
 if (!firebaseConfig || !firebaseConfig.apiKey || firebaseConfig.apiKey.startsWith("PASTE")) {
@@ -102,8 +127,8 @@ function posterEl(it, big) {
 }
 
 /* ---------- render ---------- */
-function openList(id) { S.cur = id; S.shown = PAGE; render(); window.scrollTo({ top: 0 }); }
-function everyScope() { return !S.cur || (S.scope === "every" && S.q.trim()); }
+function openList(id) { S.cur = id; S.shown = PAGE; S.sel = null; renderSelBar(); render(); window.scrollTo({ top: 0 }); }
+function everyScope() { return !S.cur || (S.scope === "every" && (S.q.trim() || S.genre)); }
 function renderTabs() {
   const tabs = $("#tabs"); tabs.innerHTML = "";
   const mk = (label, n, sel, fn) => { const b = document.createElement("button"); b.type = "button"; b.className = "tab"; b.setAttribute("role", "tab"); b.setAttribute("aria-selected", String(sel)); b.innerHTML = `${esc(label)}<span class="n">${n}</span>`; b.onclick = fn; tabs.appendChild(b); };
@@ -130,6 +155,11 @@ function filtered() {
   let rows = everyScope() ? allItems() : itemsOf(S.cur).map(it => [it, { id: S.cur, ...S.lists[S.cur] }]);
   if (S.kind !== "all") rows = rows.filter(([it]) => it.t === (S.kind === "movie" ? "m" : "t"));
   if (q) rows = rows.filter(([it]) => it.n.toLowerCase().includes(q) || String(it.y).includes(q));
+  if (S.genre) rows = rows.filter(([it]) => genreOf(it).includes(S.genre));
+  const d = it => it.d || `${it.y || 9999}`;
+  if (S.sort === "old") rows = rows.slice().sort((a, b) => d(a[0]).localeCompare(d(b[0])));
+  else if (S.sort === "new") rows = rows.slice().sort((a, b) => d(b[0]).localeCompare(d(a[0])));
+  else if (S.sort === "az") rows = rows.slice().sort((a, b) => a[0].n.localeCompare(b[0].n, undefined, { sensitivity: "base", numeric: true }));
   return rows;
 }
 function renderFirstRun() {
@@ -150,12 +180,13 @@ function render() {
   $("#scopeSeg").hidden = !S.cur;
   $("#q").placeholder = S.cur ? "Search this list" : "Search all lists";
   const grid = $("#grid"); grid.innerHTML = "";
-  const homeView = !S.cur && !S.q.trim();
+  const homeView = !S.cur && !S.q.trim() && !S.genre;
   $("#home").hidden = !homeView;
   if (homeView) { renderHome(); $("#meta").innerHTML = lists.length ? `<span>All lists</span><span>Tap a list to open it</span>` : ""; $("#moreWrap").hidden = true; return; }
   const rows = filtered(), films = rows.filter(([i]) => i.t === "m").length;
   const name = everyScope() ? "Every list" : esc(S.lists[S.cur].name);
-  $("#meta").innerHTML = `<span>${name}</span><span>${rows.length.toLocaleString()} shown</span><span>${films} films · ${rows.length - films} shows</span>${everyScope() ? "" : "<span>Ordered by release date</span>"}`;
+  $("#meta").innerHTML = `<span>${name}</span><span>${rows.length.toLocaleString()} shown</span><span>${films} films · ${rows.length - films} shows</span><span>${{ list: everyScope() ? "Grouped by list" : "List order (release date)", old: "Oldest first", new: "Newest first", az: "Title A–Z" }[S.sort]}</span>${S.genre ? `<span>${esc(S.genre)}</span>` : ""}<button class="btn ghost small" id="selBtn" type="button">${S.sel ? "Done selecting" : "Select"}</button>`;
+  $("#selBtn").onclick = () => { S.sel = S.sel ? null : new Map(); render(); renderSelBar(); };
   if (!rows.length) grid.innerHTML = `<div class="empty" style="grid-column:1/-1"><h2>${S.q ? "No matches" : "This list is empty"}</h2><p>${S.q ? "Try another spelling, or use + Add to find it on TMDB." : "Use + Add to find a title, or move one here from another list."}</p></div>`;
   const frag = document.createDocumentFragment();
   for (const [it, lst] of rows.slice(0, S.shown)) {
@@ -163,11 +194,55 @@ function render() {
     b.appendChild(posterEl(it));
     const upcoming = it.d && it.d > todayISO;
     b.insertAdjacentHTML("beforeend", `<span class="t">${esc(it.n)}</span><span class="y">${upcoming ? `<em>Coming ${esc(fmtDate(it.d))}</em>` : esc(it.y || "")}${everyScope() ? ` · ${esc(lst.name)}` : ""}</span>`);
-    b.onclick = () => openDetail(it, lst.id);
+    const sk = `${keyOf(it)}@${lst.id}`;
+    if (S.sel) { b.classList.add("selecting"); if (S.sel.has(sk)) b.classList.add("sel"); b.setAttribute("aria-pressed", String(S.sel.has(sk))); }
+    b.onclick = () => {
+      if (!S.sel) return openDetail(it, lst.id);
+      if (S.sel.has(sk)) { S.sel.delete(sk); b.classList.remove("sel"); } else { S.sel.set(sk, { it, lid: lst.id }); b.classList.add("sel"); }
+      b.setAttribute("aria-pressed", String(S.sel.has(sk))); renderSelBar();
+    };
     frag.appendChild(b);
   }
   grid.appendChild(frag);
   $("#moreWrap").hidden = rows.length <= S.shown;
+}
+
+/* ---------- select many ---------- */
+function renderSelBar() {
+  let bar = $("#selBar");
+  if (!S.sel) { bar?.remove(); return; }
+  if (!bar) { bar = document.createElement("div"); bar.id = "selBar"; bar.className = "selbar"; document.body.appendChild(bar); }
+  const n = S.sel.size;
+  bar.innerHTML = `<div class="wrap selin"><b>${n} selected</b>
+    <select id="selTo" aria-label="Move selected to list">${listOptions(S.cur || listOrder()[0]?.id)}</select>
+    <button class="btn primary" id="selMove" type="button"${n ? "" : " disabled"}>Move</button>
+    <button class="btn danger" id="selRm" type="button"${n ? "" : " disabled"}>Remove</button>
+    <button class="btn ghost" id="selX" type="button">Cancel</button></div>`;
+  $("#selX").onclick = () => { S.sel = null; render(); renderSelBar(); };
+  $("#selMove").onclick = async e => {
+    const to = $("#selTo").value, picks = [...S.sel.values()].filter(p => p.lid !== to);
+    if (!picks.length) { toast("Those titles are already in that list."); return; }
+    e.target.disabled = true;
+    try {
+      const keys = new Set(picks.map(p => keyOf(p.it)));
+      let dest = itemsOf(to).filter(x => !keys.has(keyOf(x)));
+      for (const p of picks) dest = insertByDate(dest, p.it);
+      await saveList(to, dest);
+      for (const lid of new Set(picks.map(p => p.lid))) await saveList(lid, itemsOf(lid).filter(x => !keys.has(keyOf(x))));
+      toast(`Moved ${picks.length} to ${S.lists[to].name}`); S.sel = null; render(); renderSelBar();
+    } catch (err) { e.target.disabled = false; toast("Couldn’t move them. Check your connection and try again."); }
+  };
+  $("#selRm").onclick = e => {
+    if (e.target.dataset.armed !== "1") { e.target.dataset.armed = "1"; e.target.textContent = `Remove ${n}? Tap again`; return; }
+    e.target.disabled = true;
+    (async () => {
+      try {
+        const picks = [...S.sel.values()];
+        for (const lid of new Set(picks.map(p => p.lid))) { const keys = new Set(picks.filter(p => p.lid === lid).map(p => keyOf(p.it))); await saveList(lid, itemsOf(lid).filter(x => !keys.has(keyOf(x)))); }
+        toast(`Removed ${picks.length}`); S.sel = null; render(); renderSelBar();
+      } catch (err) { e.target.disabled = false; toast("Couldn’t remove them. Try again."); }
+    })();
+  };
 }
 
 /* ---------- sheets ---------- */
@@ -255,6 +330,7 @@ function openAdd() {
         st.textContent = res.length ? `${res.length} results` : "No matches on TMDB. Try a different spelling or add the year.";
         for (const r of res) {
           const it = { i: String(r.id), t: r.media_type === "tv" ? "t" : "m", n: r.title || r.name || "Untitled", d: r.release_date || r.first_air_date || "", p: r.poster_path || "" };
+          const g = genresFromIds(r.genre_ids); if (g.length) it.g = g;
           it.y = it.d ? +it.d.slice(0, 4) : "";
           const where = whereIs(it);
           const b = document.createElement("button"); b.type = "button"; b.className = "res" + (where ? " in" : "");
@@ -328,6 +404,17 @@ $("#importFile").addEventListener("change", async e => {
     const byName = Object.fromEntries(listOrder().map(l => [l.name.toLowerCase(), l.id]));
     let pos = Math.max(-1, ...listOrder().map(l => l.pos ?? 0)); const fresh = !listOrder().length;
     let ops = [];
+    const incoming = new Set(data.lists.flatMap(l => (l.items || []).map(keyOf)));
+    const targetNames = new Set(data.lists.map(l => l.name.toLowerCase()));
+    let moved = 0;
+    for (const l of listOrder()) {
+      if (targetNames.has(l.name.toLowerCase())) continue;
+      const items = itemsOf(l.id), keep = items.filter(it => !incoming.has(keyOf(it)));
+      if (keep.length === items.length) continue;
+      moved += items.length - keep.length;
+      for (const [id, c] of Object.entries(S.chunks)) if (c.list === l.id) ops.push(["del", userDoc("chunks", id)]);
+      for (let k = 0; k * CHUNK < Math.max(1, keep.length); k++) ops.push(["set", userDoc("chunks", `${l.id}~${k}`), { list: l.id, k, items: keep.slice(k * CHUNK, (k + 1) * CHUNK) }]);
+    }
     for (const l of data.lists) {
       const lid = byName[l.name.toLowerCase()] || (S.lists[l.id || slug(l.name)] ? `${slug(l.name)}-${Date.now() % 10000}` : (l.id || slug(l.name)));
       if (!byName[l.name.toLowerCase()]) ops.push(["set", userDoc("lists", lid), { name: l.name, pos: fresh ? (l.pos ?? ++pos) : ++pos }]);
@@ -340,7 +427,7 @@ $("#importFile").addEventListener("change", async e => {
       for (const [op, ref, val] of ops.slice(i, i + 400)) op === "set" ? b.set(ref, val) : b.delete(ref);
       await b.commit();
     }
-    toast(`Loaded ${data.lists.length} lists`);
+    toast(`Loaded ${data.lists.length} list${data.lists.length > 1 ? "s" : ""}${moved ? ` · moved ${moved} title${moved > 1 ? "s" : ""} from other lists` : ""}`);
   } catch (err) { toast(err.message === "format" ? "That file isn’t a Watch Lists file." : "Couldn’t load that file. Try again."); }
 });
 
@@ -393,6 +480,9 @@ let qT; $("#q").addEventListener("input", e => { clearTimeout(qT); qT = setTimeo
 const seg = (ids, key, vals) => ids.forEach((id, i) => $(id).onclick = () => { S[key] = vals[i]; ids.forEach((x, j) => $(x).setAttribute("aria-pressed", String(i === j))); S.shown = PAGE; render(); });
 seg(["#fAll", "#fMovie", "#fTv"], "kind", ["all", "movie", "tv"]);
 seg(["#sList", "#sEvery"], "scope", ["list", "every"]);
+S.sort = pref("wl-sort") || "list"; $("#sort").value = S.sort;
+$("#sort").onchange = e => { S.sort = e.target.value; pref("wl-sort", S.sort); S.shown = PAGE; render(); };
+$("#genre").onchange = e => { S.genre = e.target.value; S.shown = PAGE; render(); };
 $("#moreBtn").onclick = () => { S.shown += PAGE * 2; render(); };
 $("#addBtn").onclick = () => openAdd();
 $("#manageBtn").onclick = openManage;
